@@ -103,7 +103,8 @@ def main():
     ds_idx = datasets.index(default_dataset) if default_dataset in datasets else 0
     selected_dataset = st.sidebar.selectbox("Dataset", datasets, index=ds_idx)
     
-    # Get decoding algorithms for the selected dataset
+    # File 1 Selection
+    st.sidebar.subheader("File 1 (Base)")
     ds_path = os.path.join('.', selected_dataset)
     algorithms = sorted([d for d in os.listdir(ds_path) if os.path.isdir(os.path.join(ds_path, d))])
     
@@ -113,60 +114,93 @@ def main():
         
     default_algo = "BEAM"
     algo_idx = algorithms.index(default_algo) if default_algo in algorithms else 0
-    selected_algo = st.sidebar.selectbox("Decoding Algorithm", algorithms, index=algo_idx)
+    selected_algo_1 = st.sidebar.selectbox("Algorithm 1", algorithms, index=algo_idx, key="algo1")
     
-    # Get JSON files for the selected algorithm
-    algo_path = os.path.join(ds_path, selected_algo)
-    json_files = sorted([f for f in os.listdir(algo_path) if f.endswith('.json')])
+    algo_path_1 = os.path.join(ds_path, selected_algo_1)
+    json_files_1 = sorted([f for f in os.listdir(algo_path_1) if f.endswith('.json')])
     
-    if not json_files:
-        st.sidebar.warning(f"No JSON files found in {selected_algo}.")
+    if not json_files_1:
+        st.sidebar.warning(f"No JSON files found in {selected_algo_1}.")
         return
         
     default_file = "output_seal_limit_beam_intersect.json"
-    file_idx = json_files.index(default_file) if default_file in json_files else 0
-    selected_file = st.sidebar.selectbox("Output File", json_files, index=file_idx)
+    file_idx_1 = json_files_1.index(default_file) if default_file in json_files_1 else 0
+    selected_file_1 = st.sidebar.selectbox("File 1", json_files_1, index=file_idx_1, key="file1")
+    file_path_1 = os.path.join(algo_path_1, selected_file_1)
+
+    # Comparison Mode
+    comparison_mode = st.sidebar.checkbox("Comparison Mode")
+    file_path_2 = None
+    data_2 = None
     
-    file_path = os.path.join(algo_path, selected_file)
-    
+    if comparison_mode:
+        st.sidebar.subheader("File 2 (Comparison)")
+        selected_algo_2 = st.sidebar.selectbox("Algorithm 2", algorithms, index=algo_idx, key="algo2")
+        algo_path_2 = os.path.join(ds_path, selected_algo_2)
+        json_files_2 = sorted([f for f in os.listdir(algo_path_2) if f.endswith('.json')])
+        
+        if not json_files_2:
+            st.sidebar.warning(f"No JSON files found in {selected_algo_2}.")
+        else:
+            # Try to match the filename from file 1 if possible
+            file_idx_2 = json_files_2.index(selected_file_1) if selected_file_1 in json_files_2 else 0
+            selected_file_2 = st.sidebar.selectbox("File 2", json_files_2, index=file_idx_2, key="file2")
+            file_path_2 = os.path.join(algo_path_2, selected_file_2)
+
     try:
-        data = load_data(file_path)
-    except FileNotFoundError:
-        st.error(f"File not found: {file_path}")
-        return
+        data_1 = load_data(file_path_1)
+        if file_path_2:
+            data_2 = load_data(file_path_2)
+            # Create a mapping for quick lookup by question
+            data_2_map = {item['question']: item for item in data_2}
     except Exception as e:
-        st.error(f"Error loading file: {e}")
+        st.error(f"Error loading files: {e}")
         return
 
-    # Calculate Hits@k for the dataset (cached)
-    hits_metrics = calculate_hits_at_k(file_path, ks=(1, 5, 10, 100))
+    # Calculate Metrics
+    hits_metrics_1 = calculate_hits_at_k(file_path_1, ks=(1, 5, 10, 100))
+    if file_path_2:
+        hits_metrics_2 = calculate_hits_at_k(file_path_2, ks=(1, 5, 10, 100))
     
     # Display Metrics at the top
-    st.subheader(f"📊 Global Metrics: {selected_file}")
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Total Queries", len(data))
-    m2.metric("Hits@1", f"{hits_metrics[1]:.1f}%")
-    m3.metric("Hits@5", f"{hits_metrics[5]:.1f}%")
-    m4.metric("Hits@10", f"{hits_metrics[10]:.1f}%")
-    m5.metric("Hits@100", f"{hits_metrics[100]:.1f}%")
-    
+    if not comparison_mode:
+        st.subheader(f"📊 Global Metrics: {selected_file_1}")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Total Queries", len(data_1))
+        m2.metric("Hits@1", f"{hits_metrics_1[1]:.1f}%")
+        m3.metric("Hits@5", f"{hits_metrics_1[5]:.1f}%")
+        m4.metric("Hits@10", f"{hits_metrics_1[10]:.1f}%")
+        m5.metric("Hits@100", f"{hits_metrics_1[100]:.1f}%")
+    else:
+        st.subheader(f"📊 Comparison: {selected_file_1} vs {selected_file_2}")
+        cols = st.columns(5)
+        cols[0].write("**Metric**")
+        cols[0].write("Total Queries")
+        cols[0].write("Hits@1")
+        cols[0].write("Hits@5")
+        cols[0].write("Hits@10")
+        cols[0].write("Hits@100")
+        
+        for i, (name, metrics) in enumerate([("File 1", hits_metrics_1), ("File 2", hits_metrics_2)]):
+            c = cols[i+1]
+            c.write(f"**{name}**")
+            c.write(f"{len(data_1) if i==0 else len(data_2)}")
+            for k in [1, 5, 10, 100]:
+                val = metrics[k]
+                c.write(f"{val:.1f}%")
+
     st.divider()
 
-    st.sidebar.write(f"Total Queries: {len(data)}")
-    
     # Search and Filter
     query_search = st.sidebar.text_input("Search Question")
-    filtered_data = [d for d in data if query_search.lower() in d['question'].lower()]
+    filtered_data = [d for d in data_1 if query_search.lower() in d['question'].lower()]
     
     if not filtered_data:
         st.warning("No queries match the search criteria.")
         return
 
     def has_top_positive(item):
-        p_ids = set()
-        for p in item.get('positive_ctxs', []):
-            p_ids.add(p.get('passage_id') or p.get('text', ''))
-        
+        p_ids = {p.get('passage_id') or p.get('text', '') for p in item.get('positive_ctxs', [])}
         for ctx in item.get('ctxs', [])[:2]:
             if (ctx.get('passage_id') or ctx.get('text', '')) in p_ids:
                 return True
@@ -179,131 +213,136 @@ def main():
         format_func=lambda i: f"{'✅ ' if has_top_positive(filtered_data[i]) else ''}{i+1}: {filtered_data[i]['question'][:50]}..."
     )
     
-    item = filtered_data[selected_idx]
+    item_1 = filtered_data[selected_idx]
+    item_2 = data_2_map.get(item_1['question']) if comparison_mode else None
     
-    # Pre-calculate key categories and color mapping
-    positive_ids = set()
-    for p in item.get('positive_ctxs', []):
-        positive_ids.add(p.get('passage_id') or p.get('text', ''))
-
-    pos_keys = {} # key_text -> max_score
-    neg_keys = {} # key_text -> max_score
-    
-    for ctx in item.get('ctxs', []):
-        is_pos = (ctx.get('passage_id') or ctx.get('text', '')) in positive_ids
-                
-        keys_data = ctx.get('keys', [])
-        if isinstance(keys_data, str):
-            try: keys_data = json.loads(keys_data)
-            except: keys_data = []
+    def get_key_data(item):
+        if not item: return {}, {}, set()
+        positive_ids = {p.get('passage_id') or p.get('text', '') for p in item.get('positive_ctxs', [])}
+        pos_keys = {}
+        neg_keys = {}
+        for ctx in item.get('ctxs', []):
+            is_pos = (ctx.get('passage_id') or ctx.get('text', '')) in positive_ids
+            keys_data = ctx.get('keys', [])
+            if isinstance(keys_data, str):
+                try: keys_data = json.loads(keys_data)
+                except: keys_data = []
+            for k in keys_data:
+                key_text = str(k[0]).strip() if isinstance(k, list) and k else k.strip() if isinstance(k, str) else ""
+                if key_text:
+                    target = pos_keys if is_pos else neg_keys
+                    score = k[2] if isinstance(k, list) and len(k) >= 3 else 0.0
+                    if key_text not in target or score > target[key_text]:
+                        target[key_text] = score
         
-        for k in keys_data:
-            key_text = ""
-            score = 0.0
-            if isinstance(k, list) and k:
-                key_text = str(k[0]).strip()
-                if len(k) >= 3: score = k[2]
-            elif isinstance(k, str):
-                key_text = k.strip()
-            
-            if key_text:
-                target_dict = pos_keys if is_pos else neg_keys
-                # Update max score for this key text
-                if key_text not in target_dict or score > target_dict[key_text]:
-                    target_dict[key_text] = score
-    
-    color_mapping = {} # key_lower -> {bg, fg}
-    
-    all_keys_with_scores = {} # key_text -> (max_score, category)
-    
-    # Identify unique keys across both positive and negative
-    unique_key_texts = set(pos_keys.keys()) | set(neg_keys.keys())
-    
-    for k in unique_key_texts:
-        is_in_pos = k in pos_keys
-        is_in_neg = k in neg_keys
-        max_score = max(pos_keys.get(k, 0.0), neg_keys.get(k, 0.0))
-        
-        if is_in_pos and is_in_neg:
-            category = "both"
-            color_mapping[k.lower()] = {"bg": "#ffc107", "fg": "black"}
-        elif is_in_pos:
-            category = "only_pos"
-            color_mapping[k.lower()] = {"bg": "#28a745", "fg": "white"}
-        else:
-            category = "only_neg"
-            color_mapping[k.lower()] = {"bg": "#dc3545", "fg": "white"}
-            
-        all_keys_with_scores[k] = (max_score, category)
+        color_mapping = {}
+        all_keys = {}
+        unique_texts = set(pos_keys.keys()) | set(neg_keys.keys())
+        for k in unique_texts:
+            is_in_pos = k in pos_keys
+            is_in_neg = k in neg_keys
+            max_score = max(pos_keys.get(k, 0.0), neg_keys.get(k, 0.0))
+            if is_in_pos and is_in_neg:
+                color_mapping[k.lower()] = {"bg": "#ffc107", "fg": "black"}
+            elif is_in_pos:
+                color_mapping[k.lower()] = {"bg": "#28a745", "fg": "white"}
+            else:
+                color_mapping[k.lower()] = {"bg": "#dc3545", "fg": "white"}
+            all_keys[k] = max_score
+        return all_keys, color_mapping, positive_ids
 
-    # Sort all keys by max score descending for the summary
-    sorted_summary_keys = sorted(all_keys_with_scores.items(), key=lambda x: x[1][0], reverse=True)
-    
-    # Display Question and Answers
-    st.header(f"Question: {item['question']}")
-    
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col1:
-        st.subheader("Expected Answers")
-        for ans in item.get('answers', []):
-            st.markdown(f"- {ans}")
-            
-    with col2:
-        st.subheader("Stats")
-        st.write(f"Total retrieved (ctxs): {len(item.get('ctxs', []))}")
-        st.write(f"Total positives: {len(item.get('positive_ctxs', []))}")
+    keys_1, colors_1, p_ids_1 = get_key_data(item_1)
+    keys_2, colors_2, p_ids_2 = get_key_data(item_2) if item_2 else ({}, {}, set())
 
-    with col3:
-        st.subheader("All Keys Matched")
-        if not sorted_summary_keys:
-            st.write("None")
-        else:
-            badges = []
-            for k, (score, cat) in sorted_summary_keys:
-                style = color_mapping[k.lower()]
-                score_str = f"{score:.2f}" if isinstance(score, (int, float)) else str(score)
-                badges.append(f'<span title="Max Score: {score_str}" style="background-color: {style["bg"]}; color: {style["fg"]}; padding: 2px 6px; border-radius: 4px; margin-right: 4px; display: inline-block; margin-bottom: 4px; cursor: help;">{k}</span>')
-            
-            st.markdown(f'<div>{" ".join(badges)}</div>', unsafe_allow_html=True)
+    st.header(f"Question: {item_1['question']}")
+    
+    # Comparison display
+    if not comparison_mode:
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col1:
+            st.subheader("Expected Answers")
+            for ans in item_1.get('answers', []): st.markdown(f"- {ans}")
+        with col2:
+            st.subheader("Stats")
+            st.write(f"Total retrieved: {len(item_1.get('ctxs', []))}")
+            st.write(f"Total positives: {len(item_1.get('positive_ctxs', []))}")
+        with col3:
+            st.subheader("All Keys Matched")
+            sorted_keys = sorted(keys_1.items(), key=lambda x: x[1], reverse=True)
+            badges = [f'<span title="Max Score: {s:.2f}" style="background-color: {colors_1[k.lower()]["bg"]}; color: {colors_1[k.lower()]["fg"]}; padding: 2px 6px; border-radius: 4px; margin-right: 4px; display: inline-block; margin-bottom: 4px; cursor: help;">{k}</span>' for k, s in sorted_keys]
+            st.markdown(f'<div>{" ".join(badges) if badges else "None"}</div>', unsafe_allow_html=True)
+    else:
+        st.subheader("Key Comparison")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.write("**Only in File 1**")
+            diff1 = set(keys_1.keys()) - set(keys_2.keys())
+            sorted_diff1 = sorted([(k, keys_1[k]) for k in diff1], key=lambda x: x[1], reverse=True)
+            badges = [f'<span title="Score: {s:.2f}" style="background-color: {colors_1[k.lower()]["bg"]}; color: {colors_1[k.lower()]["fg"]}; padding: 2px 6px; border-radius: 4px; margin-right: 4px; display: inline-block; margin-bottom: 4px; cursor: help;">{k}</span>' for k, s in sorted_diff1]
+            st.markdown(f'<div>{" ".join(badges) if badges else "None"}</div>', unsafe_allow_html=True)
+        with c2:
+            st.write("**Common Keys**")
+            common = set(keys_1.keys()) & set(keys_2.keys())
+            sorted_common = sorted([(k, max(keys_1[k], keys_2[k])) for k in common], key=lambda x: x[1], reverse=True)
+            badges = [f'<span title="Max Score: {s:.2f}" style="background-color: {colors_1[k.lower()]["bg"]}; color: {colors_1[k.lower()]["fg"]}; padding: 2px 6px; border-radius: 4px; margin-right: 4px; display: inline-block; margin-bottom: 4px; cursor: help;">{k}</span>' for k, s in sorted_common]
+            st.markdown(f'<div>{" ".join(badges) if badges else "None"}</div>', unsafe_allow_html=True)
+        with c3:
+            st.write("**Only in File 2**")
+            diff2 = set(keys_2.keys()) - set(keys_1.keys())
+            sorted_diff2 = sorted([(k, keys_2[k]) for k in diff2], key=lambda x: x[1], reverse=True)
+            badges = [f'<span title="Score: {s:.2f}" style="background-color: {colors_2[k.lower()]["bg"]}; color: {colors_2[k.lower()]["fg"]}; padding: 2px 6px; border-radius: 4px; margin-right: 4px; display: inline-block; margin-bottom: 4px; cursor: help;">{k}</span>' for k, s in sorted_diff2]
+            st.markdown(f'<div>{" ".join(badges) if badges else "None"}</div>', unsafe_allow_html=True)
 
     st.divider()
 
-    # Display Retrieved Documents
-    st.subheader("Retrieved Documents (ctxs)")
+    # Document Display
+    if not comparison_mode:
+        st.subheader("Retrieved Documents")
+        for i, ctx in enumerate(item_1.get('ctxs', [])):
+            display_ctx(i, ctx, p_ids_1, colors_1)
+    else:
+        if not item_2:
+            st.error("Question not found in File 2")
+            return
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            st.subheader(f"File 1: {selected_algo_1}")
+            for i, ctx in enumerate(item_1.get('ctxs', [])):
+                display_ctx(i, ctx, p_ids_1, colors_1)
+        with col_f2:
+            st.subheader(f"File 2: {selected_algo_2}")
+            for i, ctx in enumerate(item_2.get('ctxs', [])):
+                display_ctx(i, ctx, p_ids_2, colors_2)
+
+def display_ctx(i, ctx, positive_ids, color_mapping):
+    is_positive = (ctx.get('passage_id') or ctx.get('text', '')) in positive_ids
+    keys_data = ctx.get('keys', [])
+    if isinstance(keys_data, str):
+        try: keys_data = json.loads(keys_data)
+        except: keys_data = []
     
-    for i, ctx in enumerate(item.get('ctxs', [])):
-        is_positive = (ctx.get('passage_id') or ctx.get('text', '')) in positive_ids
-            
-        keys_data = ctx.get('keys', [])
-        if isinstance(keys_data, str):
-            try: keys_data = json.loads(keys_data)
-            except: keys_data = []
-        
-        border_color = "#28a745" if is_positive else "#dc3545"
-        bg_color = "#f8f9fa"
-        
-        with st.container():
-            st.markdown(
-                f"""
-                <div style="border: 2px solid {border_color}; border-radius: 10px; padding: 15px; margin-bottom: 20px; background-color: {bg_color}; color: black;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <h4 style="margin-top: 0; color: #333;">#{i+1}: {ctx.get('passage_id', 'Unknown ID')}</h4>
-                        <span style="background-color: {border_color}; color: white; padding: 4px 10px; border-radius: 5px; font-weight: bold;">
-                            {"POSITIVE" if is_positive else "NEGATIVE"}
-                        </span>
-                    </div>
-                    <p style="font-size: 0.9em; color: #666;">Score: {ctx.get('score', 'N/A')}</p>
-                    <hr style="border: 0.5px solid #ccc; margin: 10px 0;">
-                    <div style="font-family: serif; line-height: 1.6; color: #111;">
-                        {highlight_text(ctx.get('text', ''), keys_data, color_mapping)}
-                    </div>
-                    <div style="margin-top: 10px; font-size: 0.8em; color: #888;">
-                        <strong>Keys matched:</strong> {keys_data}
-                    </div>
+    border_color = "#28a745" if is_positive else "#dc3545"
+    bg_color = "#f8f9fa"
+    
+    with st.container():
+        st.markdown(
+            f"""
+            <div style="border: 2px solid {border_color}; border-radius: 10px; padding: 15px; margin-bottom: 20px; background-color: {bg_color}; color: black;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h4 style="margin-top: 0; color: #333;">#{i+1}: {ctx.get('passage_id', 'Unknown ID')}</h4>
+                    <span style="background-color: {border_color}; color: white; padding: 4px 10px; border-radius: 5px; font-weight: bold;">
+                        {"POSITIVE" if is_positive else "NEGATIVE"}
+                    </span>
                 </div>
-                """,
-                unsafe_allow_html=True
-            )
+                <p style="font-size: 0.9em; color: #666;">Score: {ctx.get('score', 'N/A')}</p>
+                <hr style="border: 0.5px solid #ccc; margin: 10px 0;">
+                <div style="font-family: serif; line-height: 1.6; color: #111;">
+                    {highlight_text(ctx.get('text', ''), keys_data, color_mapping)}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
 if __name__ == "__main__":
     main()
