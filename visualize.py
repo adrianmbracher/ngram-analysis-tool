@@ -3,13 +3,38 @@ import json
 import re
 import html
 import os
+import sys
 from typing import List, Dict, Any
 
 @st.cache_data
 def load_data(file_path: str) -> List[Dict[str, Any]]:
-    """Loads JSON data from the specified file path."""
+    """Loads JSON data from the specified file path and pre-processes it for speed."""
     with open(file_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+        dataset = json.load(f)
+    
+    # Pre-process for performance
+    for item in dataset:
+        # Pre-calculate top-positive status
+        positive_ids = {p.get('passage_id') or p.get('text', '') for p in item.get('positive_ctxs', [])}
+        item['_positive_ids'] = positive_ids  # Store for later use
+        
+        has_pos = False
+        for ctx in item.get('ctxs', [])[:2]:
+            if (ctx.get('passage_id') or ctx.get('text', '')) in positive_ids:
+                has_pos = True
+                break
+        item['_has_top_positive'] = has_pos
+        
+        # Pre-parse keys JSON strings
+        for ctx in item.get('ctxs', []):
+            keys_data = ctx.get('keys', [])
+            if isinstance(keys_data, str):
+                try:
+                    ctx['keys'] = json.loads(keys_data)
+                except:
+                    ctx['keys'] = []
+    
+    return dataset
 
 @st.cache_data
 def calculate_hits_at_k(file_path: str, ks: tuple = (1, 5, 10, 100)):
@@ -22,7 +47,7 @@ def calculate_hits_at_k(file_path: str, ks: tuple = (1, 5, 10, 100)):
     
     max_k = max(ks)
     for item in dataset:
-        positive_ids = {p.get('passage_id') or p.get('text', '') for p in item.get('positive_ctxs', [])}
+        positive_ids = item.get('_positive_ids', set())
         
         # Find the rank of the first hit in a single pass
         for i, ctx in enumerate(item.get('ctxs', [])[:max_k]):
@@ -35,54 +60,59 @@ def calculate_hits_at_k(file_path: str, ks: tuple = (1, 5, 10, 100)):
     
     return {k: (v / total) * 100 for k, v in hits.items()}
 
-def highlight_text(text: str, keys: List[List[Any]], color_mapping: Dict[str, Dict[str, str]]) -> str:
+def highlight_text(text: str, keys: List[Any], color_mapping: Dict[str, Dict[str, str]]) -> str:
     """Highlights key matches in the text using HTML <mark> tags with specific colors and score on hover."""
     if not keys:
         return html.escape(text)
     
-    # Create a local mapping for scores in this context
-    # Use lowercase for case-insensitive lookup
     score_mapping = {}
-    for k in keys:
-        if isinstance(k, list) and len(k) >= 3:
-            key_text = str(k[0]).strip().lower()
-            score = k[2]
-            # Keep the highest score if the same key appears multiple times in one context
-            if key_text not in score_mapping or score > score_mapping[key_text]:
-                score_mapping[key_text] = score
-
-    # Sort keys by length descending to handle overlapping matches
-    sorted_keys = sorted([str(k[0]).strip() for k in keys], key=len, reverse=True)
-    
-    # Remove duplicates
     unique_keys = []
-    for k in sorted_keys:
-        if k not in unique_keys and k:
-            unique_keys.append(k)
+    seen = set()
+    
+    for k in keys:
+        if isinstance(k, list) and k:
+            key_text = str(k[0]).strip()
+            score = k[2] if len(k) >= 3 else 0.0
+        elif isinstance(k, str):
+            key_text = k.strip()
+            score = 0.0
+        else:
+            continue
             
+        if not key_text: continue
+        kl = key_text.lower()
+        if kl not in seen:
+            unique_keys.append(key_text)
+            seen.add(kl)
+        
+        if kl not in score_mapping or score > score_mapping[kl]:
+            score_mapping[kl] = score
+
     if not unique_keys:
         return html.escape(text)
+
+    # Sort keys by length descending to handle overlapping matches properly
+    unique_keys.sort(key=len, reverse=True)
 
     # Escape HTML in the original text first
     text = html.escape(text)
     
     # Create a regex pattern to match any of the keys (case-insensitive)
-    pattern = "|".join([re.escape(html.escape(k)) for k in unique_keys])
+    pattern = "|".join(re.escape(html.escape(k)) for k in unique_keys)
+    regex = re.compile(f"({pattern})", flags=re.IGNORECASE)
     
     def replace_func(match):
         val_original = match.group(0)
-        val_lower = val_original.strip().lower()
-        style = color_mapping.get(val_lower, {"bg": "#ffff00", "fg": "black"})
-        score = score_mapping.get(val_lower, "N/A")
+        # Unescape and strip to match the keys used in color_mapping
+        val_lookup = html.unescape(val_original).strip().lower()
         
-        # Format score to 2 decimal places if it's a number
+        style = color_mapping.get(val_lookup, {"bg": "#ffff00", "fg": "black"})
+        score = score_mapping.get(val_lookup, "N/A")
         score_str = f"{score:.2f}" if isinstance(score, (int, float)) else str(score)
         
         return f'<mark title="Score: {score_str}" style="background-color: {style["bg"]}; color: {style["fg"]}; padding: 2px; border-radius: 2px; cursor: help;">{val_original}</mark>'
     
-    # Use re.sub with a case-insensitive flag
-    highlighted = re.sub(f"({pattern})", replace_func, text, flags=re.IGNORECASE)
-    return highlighted
+    return regex.sub(replace_func, text)
 
 def main():
     st.set_page_config(page_title="IR Data Visualization Tool", layout="wide")
@@ -91,31 +121,38 @@ def main():
     # Sidebar for file selection and configuration
     st.sidebar.header("Data Selection")
     
-    # Get datasets (top-level directories, excluding venv and dotfiles)
-    datasets = sorted([d for d in os.listdir('.') if os.path.isdir(d) and not d.startswith('.') and d != 'venv'])
+    # Root path from CLI arg, environment variable, or default to current directory
+    cli_args = [a for a in sys.argv[1:] if not a.startswith('-')]
+    default_root = os.environ.get("NGRAM_DATA_PATH", cli_args[0] if cli_args else ".")
+    base_path = st.sidebar.text_input("Root Data Path", default_root)
+    
+    if not os.path.exists(base_path):
+        st.sidebar.error(f"Path does not exist: {base_path}")
+        return
+
+    # 1. Dataset Selection
+    datasets = sorted([d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d)) and not d.startswith('.') and d not in ('venv', '.venv')])
     
     if not datasets:
-        st.sidebar.error("No dataset directories found.")
+        st.sidebar.error(f"No dataset directories found in {os.path.abspath(base_path)}.")
         return
         
-    # Default selection
-    default_dataset = "LIMIT"
-    ds_idx = datasets.index(default_dataset) if default_dataset in datasets else 0
+    ds_idx = datasets.index("LIMIT") if "LIMIT" in datasets else 0
     selected_dataset = st.sidebar.selectbox("Dataset", datasets, index=ds_idx)
     
-    # File 1 Selection
+    # 2. Algorithm Selection (File 1)
     st.sidebar.subheader("File 1 (Base)")
-    ds_path = os.path.join('.', selected_dataset)
+    ds_path = os.path.join(base_path, selected_dataset)
     algorithms = sorted([d for d in os.listdir(ds_path) if os.path.isdir(os.path.join(ds_path, d))])
     
     if not algorithms:
         st.sidebar.warning(f"No algorithm directories found in {selected_dataset}.")
         return
         
-    default_algo = "BEAM"
-    algo_idx = algorithms.index(default_algo) if default_algo in algorithms else 0
+    algo_idx = algorithms.index("BEAM") if "BEAM" in algorithms else 0
     selected_algo_1 = st.sidebar.selectbox("Algorithm 1", algorithms, index=algo_idx, key="algo1")
     
+    # 3. File Selection (File 1)
     algo_path_1 = os.path.join(ds_path, selected_algo_1)
     json_files_1 = sorted([f for f in os.listdir(algo_path_1) if f.endswith('.json')])
     
@@ -193,24 +230,20 @@ def main():
 
     # Search and Filter
     query_search = st.sidebar.text_input("Search Question")
-    filtered_data = [d for d in data_1 if query_search.lower() in d['question'].lower()]
+    if query_search:
+        filtered_data = [d for d in data_1 if query_search.lower() in d['question'].lower()]
+    else:
+        filtered_data = data_1
     
     if not filtered_data:
         st.warning("No queries match the search criteria.")
         return
 
-    def has_top_positive(item):
-        p_ids = {p.get('passage_id') or p.get('text', '') for p in item.get('positive_ctxs', [])}
-        for ctx in item.get('ctxs', [])[:2]:
-            if (ctx.get('passage_id') or ctx.get('text', '')) in p_ids:
-                return True
-        return False
-
     # Select query
     selected_idx = st.sidebar.selectbox(
         "Select Question", 
         range(len(filtered_data)), 
-        format_func=lambda i: f"{'✅ ' if has_top_positive(filtered_data[i]) else ''}{i+1}: {filtered_data[i]['question'][:50]}..."
+        format_func=lambda i: f"{'✅ ' if filtered_data[i].get('_has_top_positive') else ''}{i+1}: {filtered_data[i]['question'][:50]}..."
     )
     
     item_1 = filtered_data[selected_idx]
@@ -218,37 +251,53 @@ def main():
     
     def get_key_data(item):
         if not item: return {}, {}, set()
-        positive_ids = {p.get('passage_id') or p.get('text', '') for p in item.get('positive_ctxs', [])}
-        pos_keys = {}
-        neg_keys = {}
+        positive_ids = item.get('_positive_ids', set())
+        pos_scores = {}
+        neg_scores = {}
+        key_display = {}
+        
         for ctx in item.get('ctxs', []):
             is_pos = (ctx.get('passage_id') or ctx.get('text', '')) in positive_ids
             keys_data = ctx.get('keys', [])
-            if isinstance(keys_data, str):
-                try: keys_data = json.loads(keys_data)
-                except: keys_data = []
             for k in keys_data:
-                key_text = str(k[0]).strip() if isinstance(k, list) and k else k.strip() if isinstance(k, str) else ""
-                if key_text:
-                    target = pos_keys if is_pos else neg_keys
-                    score = k[2] if isinstance(k, list) and len(k) >= 3 else 0.0
-                    if key_text not in target or score > target[key_text]:
-                        target[key_text] = score
+                if isinstance(k, list) and k:
+                    text = str(k[0]).strip()
+                    score = k[2] if len(k) >= 3 else 0.0
+                elif isinstance(k, str):
+                    text = k.strip()
+                    score = 0.0
+                else:
+                    continue
+                    
+                if text:
+                    tl = text.lower()
+                    if is_pos:
+                        pos_scores[tl] = max(pos_scores.get(tl, 0.0), score)
+                    else:
+                        neg_scores[tl] = max(neg_scores.get(tl, 0.0), score)
+                    
+                    # Preference: positive case > first case found
+                    if tl not in key_display or is_pos:
+                        key_display[tl] = text
         
         color_mapping = {}
         all_keys = {}
-        unique_texts = set(pos_keys.keys()) | set(neg_keys.keys())
-        for k in unique_texts:
-            is_in_pos = k in pos_keys
-            is_in_neg = k in neg_keys
-            max_score = max(pos_keys.get(k, 0.0), neg_keys.get(k, 0.0))
-            if is_in_pos and is_in_neg:
-                color_mapping[k.lower()] = {"bg": "#ffc107", "fg": "black"}
-            elif is_in_pos:
-                color_mapping[k.lower()] = {"bg": "#28a745", "fg": "white"}
+        unique_lowers = set(pos_scores.keys()) | set(neg_scores.keys())
+        for tl in unique_lowers:
+            in_pos = tl in pos_scores
+            in_neg = tl in neg_scores
+            
+            if in_pos and in_neg:
+                color_mapping[tl] = {"bg": "#ffc107", "fg": "black"} # Amber
+            elif in_pos:
+                color_mapping[tl] = {"bg": "#28a745", "fg": "white"} # Green
             else:
-                color_mapping[k.lower()] = {"bg": "#dc3545", "fg": "white"}
-            all_keys[k] = max_score
+                color_mapping[tl] = {"bg": "#dc3545", "fg": "white"} # Red
+            
+            # Use max score across all occurrences for the summary view
+            max_score = max(pos_scores.get(tl, 0.0), neg_scores.get(tl, 0.0))
+            all_keys[key_display[tl]] = max_score
+            
         return all_keys, color_mapping, positive_ids
 
     keys_1, colors_1, p_ids_1 = get_key_data(item_1)
@@ -268,8 +317,8 @@ def main():
             st.write(f"Total positives: {len(item_1.get('positive_ctxs', []))}")
         with col3:
             st.subheader("All Keys Matched")
-            sorted_keys = sorted(keys_1.items(), key=lambda x: x[1], reverse=True)
-            badges = [f'<span title="Max Score: {s:.2f}" style="background-color: {colors_1[k.lower()]["bg"]}; color: {colors_1[k.lower()]["fg"]}; padding: 2px 6px; border-radius: 4px; margin-right: 4px; display: inline-block; margin-bottom: 4px; cursor: help;">{k}</span>' for k, s in sorted_keys]
+            sorted_keys_list = sorted(keys_1.items(), key=lambda x: x[1], reverse=True)
+            badges = [f'<span title="Max Score: {s:.2f}" style="background-color: {colors_1[k.lower()]["bg"]}; color: {colors_1[k.lower()]["fg"]}; padding: 2px 6px; border-radius: 4px; margin-right: 4px; display: inline-block; margin-bottom: 4px; cursor: help;">{k}</span>' for k, s in sorted_keys_list]
             st.markdown(f'<div>{" ".join(badges) if badges else "None"}</div>', unsafe_allow_html=True)
     else:
         st.subheader("Key Comparison")
@@ -317,9 +366,6 @@ def main():
 def display_ctx(i, ctx, positive_ids, color_mapping):
     is_positive = (ctx.get('passage_id') or ctx.get('text', '')) in positive_ids
     keys_data = ctx.get('keys', [])
-    if isinstance(keys_data, str):
-        try: keys_data = json.loads(keys_data)
-        except: keys_data = []
     
     border_color = "#28a745" if is_positive else "#dc3545"
     bg_color = "#f8f9fa"
