@@ -115,8 +115,8 @@ def highlight_text(text: str, keys: List[Any], color_mapping: Dict[str, Dict[str
     return regex.sub(replace_func, text)
 
 def main():
-    st.set_page_config(page_title="IR Data Visualization Tool", layout="wide")
-    st.title("🔍 Information Retrieval Data Visualizer")
+    st.set_page_config(page_title="N-Gram Visualizer", layout="wide")
+    st.title("🔍 N-Gram Visualizer")
 
     # Sidebar for file selection and configuration
     st.sidebar.header("Data Selection")
