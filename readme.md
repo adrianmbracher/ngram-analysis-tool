@@ -2,6 +2,8 @@
 
 A Streamlit-based visualization tool for analyzing and comparing Information Retrieval (IR) results, with a focus on n-gram/key match visualization and performance metrics.
 
+Live Demo: https://ngram-analysis-tool.streamlit.app/
+
 ## 🚀 Features
 
 - **Performance Metrics:** Automatically calculates Hits@1, Hits@5, Hits@10, and Hits@100 for your datasets.
