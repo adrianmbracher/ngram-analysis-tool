@@ -6,7 +6,7 @@ A Streamlit-based visualization tool for analyzing and comparing Information Ret
 
 ## 🚀 Features
 
-- **Performance Metrics:** Automatically calculates Hits@1, Hits@5, Hits@10, and Hits@100 for your datasets.
+
 - **Interactive Visualization:** Browse through queries and their retrieved documents with rich HTML highlighting of matched keys.
 - **Smart Highlighting:**
     - <span style="background-color: #28a745; color: white; padding: 2px 4px; border-radius: 4px;">Green</span>: Keys found in positive contexts.
@@ -14,6 +14,7 @@ A Streamlit-based visualization tool for analyzing and comparing Information Ret
     - <span style="background-color: #ffc107; color: black; padding: 2px 4px; border-radius: 4px;">Amber</span>: Keys found in both positive and negative contexts.
 - **Comparison Mode:** Side-by-side comparison of two different algorithms or experimental runs.
 - **Score Analysis:** Hover over highlighted terms to see their relevance scores.
+- **Performance Metrics:** Automatically calculates Hits@1, Hits@5, Hits@10, and Hits@100 for your datasets.
 
 ## 🛠 Installation
 
