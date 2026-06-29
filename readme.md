@@ -13,7 +13,6 @@ A Streamlit-based visualization tool for analyzing and comparing Information Ret
     - <span style="background-color: #dc3545; color: white; padding: 2px 4px; border-radius: 4px;">Red</span>: Keys found in negative contexts.
     - <span style="background-color: #ffc107; color: black; padding: 2px 4px; border-radius: 4px;">Amber</span>: Keys found in both positive and negative contexts.
 - **Comparison Mode:** Side-by-side comparison of two different algorithms or experimental runs.
-- **Search & Filter:** Quickly find specific questions or filter by whether they have a "top positive" result.
 - **Score Analysis:** Hover over highlighted terms to see their relevance scores.
 
 ## 🛠 Installation
